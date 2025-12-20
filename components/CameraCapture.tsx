@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Camera, Sparkles, Zap } from 'lucide-react';
+import { Camera, Sparkles, Zap, RefreshCw } from 'lucide-react';
 
 interface CameraCaptureProps {
   onCaptureComplete: (photos: string[]) => void;
@@ -15,11 +15,17 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
   const [isFlashing, setIsFlashing] = useState(false);
   const [error, setError] = useState<string>('');
   const [cameraInfo, setCameraInfo] = useState<string>('Initializing...');
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
 
   // Initialize Camera with ULTRA HIGH RESOLUTION (8K Support)
   useEffect(() => {
     const startCamera = async () => {
       try {
+        // Stop existing stream first
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+        }
+
         const resolutions = [
           { width: 7680, height: 4320, name: '8K Ultra HD' },
           { width: 4096, height: 2160, name: '4K Cinema' },
@@ -36,7 +42,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
           try {
             mediaStream = await navigator.mediaDevices.getUserMedia({
               video: {
-                facingMode: "user",
+                facingMode: facingMode,
                 width: { ideal: res.width, min: 1280 },
                 height: { ideal: res.height, min: 720 },
                 frameRate: { ideal: 30, max: 60 },
@@ -52,7 +58,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
 
         if (!mediaStream) {
           mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "user" },
+            video: { facingMode: facingMode },
             audio: false
           });
           selectedRes = 'Auto';
@@ -83,7 +89,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
         stream.getTracks().forEach(track => track.stop());
       }
     };
-  }, []);
+  }, [facingMode]); // Re-run when facingMode changes
 
   const takePhoto = useCallback(() => {
     if (!videoRef.current || !canvasRef.current) return;
@@ -99,8 +105,13 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
     if (ctx) {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1);
+
+      // Only mirror for front camera
+      if (facingMode === 'user') {
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+      }
+
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
 
@@ -148,7 +159,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
         return newPhotos;
       });
     }
-  }, [requiredPhotos, onCaptureComplete]);
+  }, [requiredPhotos, onCaptureComplete, facingMode]);
 
   useEffect(() => {
     if (countdown === null) return;
@@ -170,6 +181,10 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
   const startSession = () => {
     setCapturedPhotos([]);
     setCountdown(3);
+  };
+
+  const switchCamera = () => {
+    setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
   };
 
   if (error) {
@@ -209,6 +224,17 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
               <span className="font-black text-sm">CAMERA</span>
             </div>
             <div className="flex gap-2">
+              {/* Switch Camera Button */}
+              <button
+                onClick={switchCamera}
+                disabled={countdown !== null}
+                className="bg-[#FFE66D] hover:bg-[#FFD43B] disabled:opacity-50 disabled:cursor-not-allowed px-3 py-1 rounded-full text-xs font-black border-2 border-gray-900 text-gray-900 flex items-center gap-1 transition-all active:scale-95 shadow-[2px_2px_0_0_rgba(0,0,0,1)] hover:shadow-[1px_1px_0_0_rgba(0,0,0,1)]"
+                title={facingMode === 'user' ? 'Switch to Back Camera' : 'Switch to Front Camera'}
+              >
+                <RefreshCw size={12} />
+                {facingMode === 'user' ? 'Front' : 'Back'}
+              </button>
+
               {/* Resolution Badge */}
               <div className="bg-[#4ECDC4] px-3 py-1 rounded-full text-xs font-black border-2 border-gray-900 text-white flex items-center gap-1">
                 <Zap size={12} /> {cameraInfo}
@@ -226,7 +252,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
               autoPlay
               playsInline
               muted
-              className="w-full h-full object-cover transform -scale-x-100"
+              className={`w-full h-full object-cover transform ${facingMode === 'user' ? '-scale-x-100' : ''}`}
             />
 
             {/* Hidden Canvas */}
