@@ -1,7 +1,7 @@
 
 export type AppState = 'start' | 'capture' | 'editing';
 
-export type TemplateType = 'strip' | 'y2k' | 'grid' | 'film' | 'modern' | 'retro' | 'wide';
+export type TemplateType = 'strip' | 'y2k' | 'grid' | 'film' | 'modern' | 'retro' | 'wide' | 'scatter' | 'comic' | 'floral' | 'cyber';
 export type FilterType = 'normal' | 'grayscale' | 'sepia' | 'vivid' | 'vintage' | 'dreamy';
 
 export interface PhotoSlot {

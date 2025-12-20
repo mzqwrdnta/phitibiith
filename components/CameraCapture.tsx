@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Camera } from 'lucide-react';
-import { Button } from './UI';
+import { Camera, Sparkles, Zap } from 'lucide-react';
 
 interface CameraCaptureProps {
   onCaptureComplete: (photos: string[]) => void;
@@ -15,22 +14,61 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
   const [countdown, setCountdown] = useState<number | null>(null);
   const [isFlashing, setIsFlashing] = useState(false);
   const [error, setError] = useState<string>('');
+  const [cameraInfo, setCameraInfo] = useState<string>('Initializing...');
 
-  // Initialize Camera
+  // Initialize Camera with ULTRA HIGH RESOLUTION (8K Support)
   useEffect(() => {
     const startCamera = async () => {
       try {
-        const mediaStream = await navigator.mediaDevices.getUserMedia({ 
-          video: { 
-            facingMode: "user",
-            width: { ideal: 7680 }, 
-            height: { ideal: 4320 }
-          }, 
-          audio: false 
-        });
+        const resolutions = [
+          { width: 7680, height: 4320, name: '8K Ultra HD' },
+          { width: 4096, height: 2160, name: '4K Cinema' },
+          { width: 3840, height: 2160, name: '4K UHD' },
+          { width: 2560, height: 1440, name: '2K QHD' },
+          { width: 1920, height: 1080, name: 'Full HD' },
+          { width: 1280, height: 720, name: 'HD' },
+        ];
+
+        let mediaStream: MediaStream | null = null;
+        let selectedRes = 'HD';
+
+        for (const res of resolutions) {
+          try {
+            mediaStream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                facingMode: "user",
+                width: { ideal: res.width, min: 1280 },
+                height: { ideal: res.height, min: 720 },
+                frameRate: { ideal: 30, max: 60 },
+              },
+              audio: false
+            });
+            selectedRes = res.name;
+            break;
+          } catch (e) {
+            continue;
+          }
+        }
+
+        if (!mediaStream) {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user" },
+            audio: false
+          });
+          selectedRes = 'Auto';
+        }
+
         setStream(mediaStream);
+        setCameraInfo(`📷 ${selectedRes}`);
+
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream;
+
+          videoRef.current.onloadedmetadata = () => {
+            const v = videoRef.current!;
+            const actualRes = `${v.videoWidth}x${v.videoHeight}`;
+            setCameraInfo(`📷 ${actualRes}`);
+          };
         }
       } catch (err) {
         console.error("Error accessing camera:", err);
@@ -45,7 +83,6 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
         stream.getTracks().forEach(track => track.stop());
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const takePhoto = useCallback(() => {
@@ -53,34 +90,66 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    
-    // High res capture
+
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
 
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false });
+
     if (ctx) {
-      // Mirror effect
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.translate(canvas.width, 0);
       ctx.scale(-1, 1);
-      ctx.drawImage(video, 0, 0);
-      
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
-      
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+      // Noise reduction and enhancement
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+
+        if (luminance < 50) {
+          const boost = 1.1;
+          data[i] = Math.min(255, r * boost);
+          data[i + 1] = Math.min(255, g * boost);
+          data[i + 2] = Math.min(255, b * boost);
+        }
+
+        const factor = 1.05;
+        const intercept = 128 * (1 - factor);
+        data[i] = Math.min(255, Math.max(0, data[i] * factor + intercept));
+        data[i + 1] = Math.min(255, Math.max(0, data[i + 1] * factor + intercept));
+        data[i + 2] = Math.min(255, Math.max(0, data[i + 2] * factor + intercept));
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+
+      let dataUrl: string;
+      try {
+        dataUrl = canvas.toDataURL('image/png');
+      } catch (e) {
+        dataUrl = canvas.toDataURL('image/jpeg', 1.0);
+      }
+
       setIsFlashing(true);
       setTimeout(() => setIsFlashing(false), 200);
 
       setCapturedPhotos(prev => {
         const newPhotos = [...prev, dataUrl];
         if (newPhotos.length >= requiredPhotos) {
-            setTimeout(() => onCaptureComplete(newPhotos), 800);
+          setTimeout(() => onCaptureComplete(newPhotos), 800);
         }
         return newPhotos;
       });
     }
   }, [requiredPhotos, onCaptureComplete]);
 
-  // Handle Countdown sequence
   useEffect(() => {
     if (countdown === null) return;
 
@@ -90,8 +159,8 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
     } else if (countdown === 0) {
       takePhoto();
       if (capturedPhotos.length < requiredPhotos - 1) {
-        setCountdown(null); 
-        setTimeout(() => setCountdown(3), 1500); // 1.5s pause between shots
+        setCountdown(null);
+        setTimeout(() => setCountdown(3), 1500);
       } else {
         setCountdown(null);
       }
@@ -105,83 +174,147 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCaptureComplete,
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-[500px] text-red-500 p-8 text-center bg-gray-100 rounded-3xl">
-        <p className="text-xl font-bold mb-4">{error}</p>
-        <Button onClick={() => window.location.reload()}>Retry Permission</Button>
+      <div className="flex flex-col items-center justify-center h-[400px] p-8 text-center">
+        {/* Error Card - Memphis Style */}
+        <div className="relative">
+          <div className="absolute inset-0 bg-gray-900 rounded-3xl transform translate-x-2 translate-y-2" />
+          <div className="relative bg-white p-8 rounded-3xl border-4 border-gray-900">
+            <div className="text-6xl mb-4">😢</div>
+            <p className="text-xl font-black text-[#FF6B9D] mb-4">{error}</p>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-6 py-3 bg-[#4ECDC4] text-white font-black rounded-full border-3 border-gray-900 shadow-[2px_2px_0_0_rgba(0,0,0,1)]"
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="flex flex-col items-center w-full max-w-4xl mx-auto">
-      <div className="relative w-full bg-black rounded-3xl overflow-hidden shadow-2xl aspect-[4/3] md:aspect-video flex flex-col mb-6 ring-8 ring-white">
-        {/* Video Feed */}
-        <video 
-          ref={videoRef} 
-          autoPlay 
-          playsInline 
-          muted 
-          className="w-full h-full object-cover transform -scale-x-100" 
-        />
-        
-        {/* Hidden Canvas */}
-        <canvas ref={canvasRef} className="hidden" />
+      {/* Camera Container - Memphis Card Style */}
+      <div className="relative w-full mb-6">
+        {/* Card Shadow */}
+        <div className="absolute inset-0 bg-[#FF6B9D] rounded-3xl transform translate-x-3 translate-y-3" />
 
-        {/* Flash Overlay */}
-        {isFlashing && <div className="absolute inset-0 bg-white z-50 animate-out fade-out duration-300" />}
-
-        {/* Countdown Overlay */}
-        {countdown !== null && countdown > 0 && (
-          <div className="absolute inset-0 flex items-center justify-center z-40 bg-black/10 backdrop-blur-[2px]">
-            <span className="text-[120px] md:text-[180px] font-black text-white drop-shadow-2xl animate-bounce leading-none">
-              {countdown}
-            </span>
-          </div>
-        )}
-
-        {/* Status Indicators */}
-        <div className="absolute top-4 right-4 flex gap-2">
-            <div className="bg-black/50 text-white px-3 py-1 rounded-full text-xs font-mono backdrop-blur-md">
-                REC ●
+        {/* Main Camera Card */}
+        <div className="relative bg-white p-4 rounded-3xl border-4 border-gray-900 overflow-hidden">
+          {/* Camera Header */}
+          <div className="flex justify-between items-center mb-3">
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-[#FF6B9D] rounded-full border-2 border-gray-900 animate-pulse" />
+              <span className="font-black text-sm">CAMERA</span>
             </div>
+            <div className="flex gap-2">
+              {/* Resolution Badge */}
+              <div className="bg-[#4ECDC4] px-3 py-1 rounded-full text-xs font-black border-2 border-gray-900 text-white flex items-center gap-1">
+                <Zap size={12} /> {cameraInfo}
+              </div>
+              <div className="bg-[#9B5DE5] px-3 py-1 rounded-full text-xs font-black border-2 border-gray-900 text-white">
+                ● LIVE
+              </div>
+            </div>
+          </div>
+
+          {/* Video Feed */}
+          <div className="relative aspect-[4/3] md:aspect-video bg-gray-900 rounded-2xl overflow-hidden border-4 border-gray-900">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="w-full h-full object-cover transform -scale-x-100"
+            />
+
+            {/* Hidden Canvas */}
+            <canvas ref={canvasRef} className="hidden" />
+
+            {/* Flash Overlay */}
+            {isFlashing && <div className="absolute inset-0 bg-white z-50 animate-out fade-out duration-300" />}
+
+            {/* Countdown Overlay */}
+            {countdown !== null && countdown > 0 && (
+              <div className="absolute inset-0 flex items-center justify-center z-40 bg-black/30">
+                <div className="relative">
+                  <div className="absolute inset-0 bg-[#FF6B9D] rounded-full transform scale-110 animate-ping opacity-50" />
+                  <span className="relative text-[100px] md:text-[150px] font-black text-white drop-shadow-2xl leading-none">
+                    {countdown}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Quality Indicator */}
+            <div className="absolute top-3 left-3 bg-black/60 backdrop-blur px-2 py-1 rounded-lg border border-white/20">
+              <span className="text-[10px] font-black text-green-400">● HD QUALITY</span>
+            </div>
+
+            {/* Corner Decorations */}
+            <div className="absolute top-3 right-3">
+              <Sparkles className="text-[#FF6B9D] w-6 h-6" />
+            </div>
+            <div className="absolute bottom-3 right-3">
+              <Sparkles className="text-[#4ECDC4] w-6 h-6" />
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Controls Container */}
+      {/* Controls Container - Memphis Style */}
       <div className="flex flex-col items-center space-y-4 w-full px-4">
-          
-        {/* Progress Indicators */}
-        <div className="flex gap-4 mb-2">
-            {Array.from({ length: requiredPhotos }).map((_, i) => (
-            <div 
-                key={i} 
-                className={`w-3 h-3 rounded-full transition-all duration-300 ${
-                i < capturedPhotos.length 
-                    ? 'bg-pink-500 scale-125' 
-                    : 'bg-gray-300'
+
+        {/* Progress Indicators - Colorful */}
+        <div className="flex gap-3 mb-2">
+          {Array.from({ length: requiredPhotos }).map((_, i) => (
+            <div
+              key={i}
+              className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-lg border-3 border-gray-900 transition-all duration-300 ${i < capturedPhotos.length
+                ? 'bg-[#4ECDC4] text-white scale-110 shadow-[3px_3px_0_0_rgba(0,0,0,1)]'
+                : 'bg-white text-gray-400'
                 }`}
-            />
-            ))}
+            >
+              {i < capturedPhotos.length ? '✓' : i + 1}
+            </div>
+          ))}
         </div>
 
         {capturedPhotos.length === 0 && countdown === null ? (
-            <Button onClick={startSession} size="lg" className="w-full max-w-xs shadow-pink-500/40 shadow-lg text-xl py-6">
-                <Camera className="w-6 h-6 mr-2" />
-                Start Photo Session
-            </Button>
+          <div className="relative">
+            <div className="absolute inset-0 bg-gray-900 rounded-full transform translate-x-1 translate-y-1" />
+            <button
+              onClick={startSession}
+              className="relative flex items-center justify-center gap-2 px-8 py-4 text-lg font-black text-white bg-[#FF6B9D] rounded-full border-3 border-gray-900 hover:translate-x-0.5 hover:translate-y-0.5 transition-transform"
+            >
+              <Camera className="w-6 h-6" />
+              Start Photo Session
+            </button>
+          </div>
         ) : (
-             <div className="text-center h-16 flex items-center justify-center">
-                 {countdown !== null ? (
-                    <p className="text-xl font-bold text-gray-700 animate-pulse">Get Ready!</p>
-                 ) : (
-                    <p className="text-xl font-bold text-gray-700">Processing...</p>
-                 )}
-             </div>
+          <div className="text-center h-16 flex items-center justify-center">
+            {countdown !== null ? (
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 bg-[#FF6B9D] rounded-full animate-pulse" />
+                <p className="text-2xl font-black text-gray-800">Get Ready!</p>
+                <div className="w-3 h-3 bg-[#FF6B9D] rounded-full animate-pulse" />
+              </div>
+            ) : (
+              <p className="text-xl font-black text-[#4ECDC4]">Processing... ✨</p>
+            )}
+          </div>
         )}
-        
-        <p className="text-gray-400 text-sm mt-4">
-            {countdown === null && capturedPhotos.length === 0 ? "Make sure you have good lighting!" : `Taking photo ${capturedPhotos.length + 1} of ${requiredPhotos}`}
-        </p>
+
+        {/* Status Message Card */}
+        <div className="bg-white px-6 py-3 rounded-full border-3 border-gray-900 shadow-[3px_3px_0_0_rgba(0,0,0,1)]">
+          <p className="text-gray-700 text-sm font-bold">
+            {countdown === null && capturedPhotos.length === 0
+              ? "✨ Ultra HD Mode - Best quality photos!"
+              : `📸 Taking photo ${capturedPhotos.length + 1} of ${requiredPhotos}`
+            }
+          </p>
+        </div>
       </div>
     </div>
   );
