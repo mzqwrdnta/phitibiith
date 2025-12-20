@@ -274,9 +274,15 @@ export const Editor: React.FC<EditorProps> = ({ photos, onReset }) => {
     const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const staticCanvasRef = useRef<HTMLCanvasElement | null>(null); // Cache for expensive rendering
+    const isStaticDirty = useRef(true);
     const photoCache = useRef<Map<string, HTMLImageElement>>(new Map());
     const stickerCache = useRef<Map<string, HTMLImageElement>>(new Map());
     const currentTemplate = TEMPLATES[activeTemplate];
+
+    // Mobile detection and optimization
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const useGrain = !isMobile; // Disable grain on mobile for better performance
 
     // Initialize bg color when template changes
     useEffect(() => {
@@ -384,361 +390,142 @@ export const Editor: React.FC<EditorProps> = ({ photos, onReset }) => {
         ctx.putImageData(imageData, 0, 0);
     };
 
-    const renderCanvas = (phase: number = 0) => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        // Set Dimensions
-        canvas.width = currentTemplate.width;
-        canvas.height = currentTemplate.height;
-
-        // --- Background ---
+    // ===== OPTIMIZED 2-STAGE RENDERING SYSTEM =====
+    // Stage 1: Draw STATIC content to offscreen canvas (backgrounds, photos, filters)
+    const drawStaticContent = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+        // Background
         ctx.fillStyle = bgColor;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillRect(0, 0, width, height);
 
-        // Apply Pattern
+        // Pattern (simplified for mobile)
         if (bgPattern !== 'none') {
             ctx.save();
-            // Increased opacity for better visibility as requested
-            ctx.fillStyle = "rgba(0,0,0,0.15)";
-            if (bgColor === '#000000' || bgColor === '#1A1A1A') ctx.fillStyle = "rgba(255,255,255,0.25)";
+            ctx.fillStyle = "rgba(0,0,0,0.1)";
+            if (bgColor === '#000000' || bgColor === '#1A1A1A') ctx.fillStyle = "rgba(255,255,255,0.2)";
 
             if (bgPattern === 'dots') {
-                for (let x = 0; x < canvas.width; x += 30) {
-                    for (let y = 0; y < canvas.height; y += 30) {
-                        ctx.beginPath();
-                        ctx.arc(x, y, 2, 0, Math.PI * 2);
-                        ctx.fill();
-                    }
+                for (let x = 0; x < width; x += 30) for (let y = 0; y < height; y += 30) {
+                    ctx.beginPath(); ctx.arc(x, y, 2, 0, Math.PI * 2); ctx.fill();
                 }
             } else if (bgPattern === 'grid') {
-                ctx.strokeStyle = ctx.fillStyle as string;
-                ctx.lineWidth = 1;
-                for (let x = 0; x < canvas.width; x += 50) {
-                    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
-                }
-                for (let y = 0; y < canvas.height; y += 50) {
-                    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
-                }
-            } else if (bgPattern === 'waves') {
-                ctx.strokeStyle = ctx.fillStyle as string;
-                ctx.lineWidth = 3;
-                for (let y = -50; y < canvas.height + 50; y += 40) {
-                    ctx.beginPath();
-                    for (let x = 0; x < canvas.width; x += 10) {
-                        ctx.lineTo(x, y + Math.sin(x * 0.02) * 20);
-                    }
-                    ctx.stroke();
-                }
-            } else if (bgPattern === 'hearts') {
-                ctx.font = "24px Arial";
-                for (let x = 0; x < canvas.width; x += 60) {
-                    for (let y = 0; y < canvas.height; y += 60) {
-                        ctx.fillText("♥", x + (y % 120 ? 30 : 0), y);
-                    }
-                }
-            } else if (bgPattern === 'stars') {
+                ctx.strokeStyle = ctx.fillStyle as string; ctx.lineWidth = 1;
+                for (let x = 0; x < width; x += 50) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke(); }
+                for (let y = 0; y < height; y += 50) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
+            } else {
+                // Simplified patterns for performance
                 ctx.font = "20px Arial";
-                for (let x = 0; x < canvas.width; x += 80) {
-                    for (let y = 0; y < canvas.height; y += 80) {
-                        ctx.fillText("✦", x + (y % 160 ? 40 : 0), y);
-                    }
-                }
-            } else if (bgPattern === 'stripes') {
-                ctx.translate(canvas.width / 2, canvas.height / 2);
-                ctx.rotate(Math.PI / 4);
-                ctx.translate(-canvas.width, -canvas.height);
-                for (let x = 0; x < canvas.width * 2; x += 40) {
-                    ctx.fillRect(x, 0, 10, canvas.height * 2);
-                }
-            } else if (bgPattern === 'diamonds') {
-                const size = 60;
-                for (let x = 0; x < canvas.width + size; x += size) {
-                    for (let y = 0; y < canvas.height + size; y += size) {
-                        ctx.beginPath();
-                        ctx.moveTo(x, y - size / 2);
-                        ctx.lineTo(x + size / 2, y);
-                        ctx.lineTo(x, y + size / 2);
-                        ctx.lineTo(x - size / 2, y);
-                        ctx.closePath();
-                        ctx.fill();
-                    }
-                }
-            } else if (bgPattern === 'zigzag') {
-                ctx.lineWidth = 4;
-                ctx.strokeStyle = ctx.fillStyle as string;
-                for (let y = 0; y < canvas.height; y += 40) {
-                    ctx.beginPath();
-                    for (let x = 0; x < canvas.width + 40; x += 40) {
-                        ctx.lineTo(x, y + (x % 80 === 0 ? 0 : 20));
-                    }
-                    ctx.stroke();
-                }
-            } else if (bgPattern === 'glitter') {
-                for (let i = 0; i < 200; i++) {
-                    const x = Math.random() * canvas.width;
-                    const y = Math.random() * canvas.height;
-                    const r = Math.random() * 2;
-                    ctx.beginPath();
-                    ctx.arc(x, y, r, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            } else if (bgPattern === 'retro') {
-                ctx.fillStyle = "rgba(100,200,255,0.1)";
-                for (let y = 0; y < canvas.height; y += 100) {
-                    ctx.fillRect(0, y, canvas.width, 1);
-                }
-                ctx.fillStyle = "rgba(255,100,255,0.1)";
-                for (let x = 0; x < canvas.width; x += 100) {
-                    ctx.fillRect(x, 0, 1, canvas.height);
-                }
-            } else if (bgPattern === 'checker') {
-                const size = 50;
-                for (let x = 0; x < canvas.width; x += size * 2) {
-                    for (let y = 0; y < canvas.height; y += size * 2) {
-                        ctx.fillRect(x, y, size, size);
-                        ctx.fillRect(x + size, y + size, size, size);
-                    }
-                }
-            } else if (bgPattern === 'bubbles') {
-                for (let i = 0; i < 40; i++) {
-                    const x = (i * 137) % canvas.width;
-                    const y = (i * 223) % canvas.height;
-                    const r = 10 + (i % 30);
-                    ctx.beginPath();
-                    ctx.arc(x, y, r, 0, Math.PI * 2);
-                    ctx.strokeStyle = ctx.fillStyle as string;
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-                }
-            } else if (bgPattern === 'confetti') {
-                const colors = ['#ff69b4', '#87ceeb', '#ffeb3b', '#9c27b0'];
-                for (let i = 0; i < 100; i++) {
-                    ctx.fillStyle = colors[i % colors.length] + '44';
-                    const x = (i * 157) % canvas.width;
-                    const y = (i * 313) % canvas.height;
-                    ctx.fillRect(x, y, 10, 10);
-                }
+                const char = bgPattern === 'hearts' ? '♥' : (bgPattern === 'stars' ? '✦' : '•');
+                for (let x = 0; x < width; x += 60) for (let y = 0; y < height; y += 60) ctx.fillText(char, x, y);
             }
             ctx.restore();
         }
 
+        // Template-specific backgrounds (simplified)
         if (activeTemplate === 'y2k') {
-            // Draw Wavy Checkers (Cream & Black)
-            drawWavyCheckerboard(ctx, canvas.width, canvas.height, bgColor, '#000000');
+            drawWavyCheckerboard(ctx, width, height, bgColor, '#000000');
         } else if (activeTemplate === 'film') {
-            // Draw Film Holes
-            drawFilmStripHoles(ctx, canvas.width, canvas.height);
-        } else if (activeTemplate === 'comic') {
-            // Comic Pop halftone + Memphis accents
-            drawHalftone(ctx, canvas.width, canvas.height);
-            // Bold black borders for comic panels
-            ctx.strokeStyle = '#000000';
-            ctx.lineWidth = 8;
-            ctx.strokeRect(30, 30, canvas.width - 60, canvas.height - 60);
-            // ACTION lines
-            ctx.save();
-            ctx.strokeStyle = '#FF6B9D';
-            ctx.lineWidth = 4;
-            for (let i = 0; i < 5; i++) {
-                ctx.beginPath();
-                ctx.moveTo(canvas.width - 80 - i * 15, 80);
-                ctx.lineTo(canvas.width - 30, 130 + i * 15);
-                ctx.stroke();
-            }
-            ctx.restore();
-        } else if (activeTemplate === 'wide') {
-            // Memphis Wide - geometric shapes
-            ctx.save();
-            // Yellow triangle
-            ctx.fillStyle = '#FFE66D';
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(200, 0);
-            ctx.lineTo(0, 200);
-            ctx.closePath();
-            ctx.fill();
-            // Teal circle
-            ctx.fillStyle = '#4ECDC4';
-            ctx.beginPath();
-            ctx.arc(canvas.width - 100, canvas.height - 100, 80, 0, Math.PI * 2);
-            ctx.fill();
-            // Purple rectangle
-            ctx.fillStyle = '#9B5DE5';
-            ctx.fillRect(canvas.width / 2 - 50, canvas.height - 50, 100, 50);
-            // Black dots pattern
-            ctx.fillStyle = '#000000';
-            for (let i = 0; i < 8; i++) {
-                ctx.beginPath();
-                ctx.arc(100 + i * 200, 30, 8, 0, Math.PI * 2);
-                ctx.fill();
-            }
-            // Bold border
-            ctx.strokeStyle = '#000000';
-            ctx.lineWidth = 6;
-            ctx.strokeRect(20, 20, canvas.width - 40, canvas.height - 40);
-            ctx.restore();
-        } else if (activeTemplate === 'scatter') {
-            // Pop Scatter - colorful Memphis shapes
-            ctx.save();
-            // Pink squiggle lines
-            ctx.strokeStyle = '#FF6B9D';
-            ctx.lineWidth = 5;
-            ctx.beginPath();
-            for (let i = 0; i < canvas.width; i += 20) {
-                ctx.lineTo(i, 40 + Math.sin(i * 0.05) * 20);
-            }
-            ctx.stroke();
-            // Yellow stars
-            ctx.fillStyle = '#FFE66D';
-            const starPositions = [[100, 100], [canvas.width - 100, 150], [150, canvas.height - 100], [canvas.width - 150, canvas.height - 150]];
-            starPositions.forEach(([sx, sy]) => {
-                ctx.font = '40px Arial';
-                ctx.fillText('★', sx, sy);
-            });
-            // Purple zigzag at bottom
-            ctx.fillStyle = '#9B5DE5';
-            ctx.beginPath();
-            for (let i = 0; i <= canvas.width; i += 40) {
-                if ((i / 40) % 2 === 0) {
-                    ctx.lineTo(i, canvas.height);
-                } else {
-                    ctx.lineTo(i, canvas.height - 30);
-                }
-            }
-            ctx.lineTo(canvas.width, canvas.height);
-            ctx.lineTo(0, canvas.height);
-            ctx.fill();
-            // Bold offset shadow border
-            ctx.fillStyle = '#000000';
-            ctx.fillRect(30, 30, canvas.width - 50, canvas.height - 50);
-            ctx.fillStyle = bgColor;
-            ctx.fillRect(20, 20, canvas.width - 50, canvas.height - 50);
-            ctx.strokeStyle = '#000000';
-            ctx.lineWidth = 4;
-            ctx.strokeRect(20, 20, canvas.width - 50, canvas.height - 50);
-            ctx.restore();
+            drawFilmStripHoles(ctx, width, height);
         } else if (activeTemplate === 'cyber') {
-            // Neon Punk - cyberpunk neon grid
             ctx.save();
-            // Neon grid
-            ctx.strokeStyle = '#FF00FF';
-            ctx.lineWidth = 1;
-            ctx.globalAlpha = 0.3;
-            for (let x = 0; x < canvas.width; x += 40) {
-                ctx.beginPath();
-                ctx.moveTo(x, 0);
-                ctx.lineTo(x, canvas.height);
-                ctx.stroke();
-            }
-            for (let y = 0; y < canvas.height; y += 40) {
-                ctx.beginPath();
-                ctx.moveTo(0, y);
-                ctx.lineTo(canvas.width, y);
-                ctx.stroke();
-            }
+            ctx.strokeStyle = '#FF00FF'; ctx.lineWidth = 1; ctx.globalAlpha = 0.3;
+            for (let x = 0; x < width; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke(); }
+            for (let y = 0; y < height; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
             ctx.globalAlpha = 1;
-            // Neon glow corners
-            const gradient1 = ctx.createRadialGradient(0, 0, 0, 0, 0, 200);
-            gradient1.addColorStop(0, 'rgba(255,0,255,0.4)');
-            gradient1.addColorStop(1, 'transparent');
-            ctx.fillStyle = gradient1;
-            ctx.fillRect(0, 0, 200, 200);
-            const gradient2 = ctx.createRadialGradient(canvas.width, canvas.height, 0, canvas.width, canvas.height, 200);
-            gradient2.addColorStop(0, 'rgba(0,255,255,0.4)');
-            gradient2.addColorStop(1, 'transparent');
-            ctx.fillStyle = gradient2;
-            ctx.fillRect(canvas.width - 200, canvas.height - 200, 200, 200);
-            // Neon border
-            ctx.strokeStyle = '#00FFFF';
-            ctx.lineWidth = 3;
-            ctx.strokeRect(15, 15, canvas.width - 30, canvas.height - 30);
-            ctx.strokeStyle = '#FF00FF';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(25, 25, canvas.width - 50, canvas.height - 50);
-            // Scanlines
-            ctx.fillStyle = 'rgba(0,0,0,0.1)';
-            for (let y = 0; y < canvas.height; y += 4) {
-                ctx.fillRect(0, y, canvas.width, 2);
-            }
+            ctx.fillStyle = 'rgba(0,0,0,0.1)'; for (let y = 0; y < height; y += 4) ctx.fillRect(0, y, width, 2);
             ctx.restore();
         }
 
-        // --- Photos ---
+        // Photos with filters (CACHED - expensive operation)
         const filter = FILTERS.find(f => f.id === activeFilter);
         ctx.filter = filter ? filter.css : 'none';
 
         const slots = currentTemplate.photoSlots;
         photos.forEach((photoUrl, index) => {
             if (index >= slots.length) return;
-            const slot = slots[index];
-
             if (photoCache.current.has(photoUrl)) {
-                drawPhotoInSlot(ctx, photoCache.current.get(photoUrl)!, slot, index);
+                drawPhotoInSlot(ctx, photoCache.current.get(photoUrl)!, slots[index], index);
             } else {
                 const img = new Image();
                 img.crossOrigin = "anonymous";
                 img.src = photoUrl;
                 img.onload = () => {
                     photoCache.current.set(photoUrl, img);
-                    renderCanvas();
+                    isStaticDirty.current = true; // Mark for re-render
                 };
             }
         });
 
-        // --- Reset Filter ---
         ctx.filter = 'none';
 
-        // --- Date Stamp ---
+        // Date stamp
         if (showDate) {
-            ctx.font = activeTemplate === 'y2k' ? "bold 30px 'Courier New', monospace" : "bold 30px 'Courier New', monospace";
-            ctx.fillStyle = (activeTemplate === 'modern' || activeTemplate === 'film' || activeTemplate === 'y2k') ? '#ffffff' : '#ff69b4';
-
-            // Shadow for readability
-            ctx.shadowColor = "rgba(0,0,0,0.5)";
-            ctx.shadowBlur = 4;
-
+            ctx.font = "bold 28px 'Courier New', monospace";
+            ctx.fillStyle = '#ffffff';
+            ctx.shadowColor = "rgba(0,0,0,0.5)"; ctx.shadowBlur = 4;
             ctx.textAlign = "right";
-            const dateStr = new Date().toLocaleDateString();
-            // Position tweak for film
-            const dx = activeTemplate === 'film' ? canvas.width - 60 : canvas.width - 40;
-            const dy = activeTemplate === 'film' ? canvas.height - 40 : canvas.height - 30;
-
-            ctx.fillText(dateStr, dx, dy);
+            ctx.fillText(new Date().toLocaleDateString(), width - 40, height - 30);
             ctx.shadowColor = "transparent";
         }
 
-        // --- Stickers ---
-        stickers.forEach((sticker, idx) => {
+        // Optional grain (disabled on mobile)
+        if (useGrain) {
+            drawGrain(ctx, width, height);
+        }
+    };
+
+    // Stage 2: Draw DYNAMIC content (stickers) on main canvas
+    const renderCanvas = () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        // Update canvas size if needed
+        if (canvas.width !== currentTemplate.width || canvas.height !== currentTemplate.height) {
+            canvas.width = currentTemplate.width;
+            canvas.height = currentTemplate.height;
+            isStaticDirty.current = true;
+        }
+
+        // Create static canvas if needed
+        if (!staticCanvasRef.current) {
+            staticCanvasRef.current = document.createElement('canvas');
+            isStaticDirty.current = true;
+        }
+
+        const sCanvas = staticCanvasRef.current;
+
+        // Re-draw static content ONLY when dirty
+        if (isStaticDirty.current || sCanvas.width !== canvas.width) {
+            sCanvas.width = canvas.width;
+            sCanvas.height = canvas.height;
+            const sCtx = sCanvas.getContext('2d', { alpha: false });
+            if (sCtx) {
+                drawStaticContent(sCtx, canvas.width, canvas.height);
+                isStaticDirty.current = false;
+            }
+        }
+
+        // Draw cached static content (FAST!)
+        ctx.drawImage(sCanvas, 0, 0);
+
+        // Draw stickers (only dynamic part)
+        stickers.forEach((sticker) => {
             ctx.save();
-
-            // Animation effects
-            const bounce = phase > 0 ? Math.sin(phase + idx) * 15 : 0;
-            const wiggle = phase > 0 ? Math.cos(phase * 2 + idx) * 5 : 0;
-
-            ctx.translate(sticker.x, sticker.y + bounce);
-            ctx.rotate(((sticker.rotation + wiggle) * Math.PI) / 180);
+            ctx.translate(sticker.x, sticker.y);
+            ctx.rotate((sticker.rotation * Math.PI) / 180);
             ctx.scale(sticker.scale, sticker.scale);
 
-            // Selection Halo
+            // Selection indicator
             if (sticker.id === selectedStickerId) {
                 ctx.strokeStyle = '#3b82f6';
-                ctx.lineWidth = 4 / sticker.scale;
-                ctx.setLineDash([10, 5]);
-                ctx.beginPath();
-                // Adjust circle size based on content approximate size
-                ctx.arc(0, 0, 60, 0, 2 * Math.PI);
-                ctx.stroke();
-
-                // Draw handle indicator
-                ctx.fillStyle = '#3b82f6';
-                ctx.beginPath();
-                ctx.arc(0, 60, 10 / sticker.scale, 0, 2 * Math.PI);
-                ctx.fill();
+                ctx.lineWidth = 3;
+                ctx.setLineDash([8, 4]);
+                ctx.strokeRect(-55, -55, 110, 110);
+                ctx.setLineDash([]);
             }
 
+            // Draw sticker
             if (sticker.url.startsWith('data:') || sticker.url.startsWith('http')) {
                 if (stickerCache.current.has(sticker.url)) {
                     ctx.drawImage(stickerCache.current.get(sticker.url)!, -50, -50, 100, 100);
@@ -748,32 +535,28 @@ export const Editor: React.FC<EditorProps> = ({ photos, onReset }) => {
                     sImg.src = sticker.url;
                     sImg.onload = () => {
                         stickerCache.current.set(sticker.url, sImg);
-                        renderCanvas();
+                        renderCanvas(); // Re-render when loaded
                     };
                 }
             } else {
                 // Emoji
-                ctx.font = "80px Arial";
+                ctx.font = "70px Arial";
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
-                // Shadow for stickers to pop
                 ctx.shadowColor = "rgba(0,0,0,0.2)";
-                ctx.shadowBlur = 10;
+                ctx.shadowBlur = 8;
                 ctx.fillText(sticker.url, 0, 0);
             }
             ctx.restore();
         });
 
-        // --- Branding ---
+        // Branding
         if (activeTemplate === 'strip') {
-            ctx.font = "bold 40px Quicksand, sans-serif";
+            ctx.font = "bold 36px Quicksand, sans-serif";
             ctx.fillStyle = "#ff69b4";
             ctx.textAlign = "center";
-            ctx.fillText("KawaiiBooth AI ✨", canvas.width / 2, canvas.height - 80);
+            ctx.fillText("KawaiiBooth AI ✨", canvas.width / 2, canvas.height - 70);
         }
-
-        // Final Grain Pass for professional 'analog' look
-        drawGrain(ctx, canvas.width, canvas.height);
     };
 
     const drawPhotoInSlot = (ctx: CanvasRenderingContext2D, img: HTMLImageElement, slot: any, slotIndex: number) => {
@@ -838,16 +621,20 @@ export const Editor: React.FC<EditorProps> = ({ photos, onReset }) => {
         ctx.restore();
     };
 
+    // Smart render triggers - ONLY when something changes
     useEffect(() => {
-        // Render loop to ensure images load
-        let animId: number;
-        const loop = () => {
-            renderCanvas();
-            animId = requestAnimationFrame(loop);
-        };
-        loop();
-        return () => cancelAnimationFrame(animId);
-    }, [activeTemplate, stickers, photos, activeFilter, bgColor, bgPattern, selectedStickerId, showDate, cornerRadius, framePadding, shadowStrength, photoOffsets, selectedPhotoSlot]);
+        isStaticDirty.current = true;
+        renderCanvas();
+    }, [activeTemplate, photos, activeFilter, bgColor, bgPattern, showDate, cornerRadius, framePadding, shadowStrength, photoOffsets, selectedPhotoSlot]);
+
+    useEffect(() => {
+        renderCanvas(); // Stickers don't need static re-render
+    }, [stickers, selectedStickerId]);
+
+    useEffect(() => {
+        // Initial render
+        renderCanvas();
+    }, []);
 
 
     // --- INTERACTION HANDLERS (Drag & Drop) ---
